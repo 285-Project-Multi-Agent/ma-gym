@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 class AmongUs(gym.Env):
     """
+
+    Among Us is an online multiplayer social deduction game developed and published by American game studio Innersloth 
+    and released on June 15, 2018. The game takes place in a space-themed setting, in which players each take on one 
+    of two roles, most being Crewmates, and a predetermined number being Impostors.
+
     Predator-prey involves a grid world, in which multiple predators attempt to capture randomly moving prey.
     Agents have a 5 × 5 view and select one of five actions ∈ {Left, Right, Up, Down, Stop} at each time step.
     Prey move according to selecting a uniformly random action at each time step.
@@ -53,7 +58,7 @@ class AmongUs(gym.Env):
         self._prey_capture_reward = prey_capture_reward
         self._agent_view_mask = (5, 5)
 
-        self.action_space = MultiAgentActionSpace([spaces.Discrete(5) for _ in range(self.n_agents)])
+        self.action_space = MultiAgentActionSpace([spaces.Discrete(6) for _ in range(self.n_agents)])
         
         self.agent_pos = {_: None for _ in range(self.n_agents)}
         self.prey_pos = {_: None for _ in range(self.n_preys)}
@@ -67,6 +72,8 @@ class AmongUs(gym.Env):
 
         self._alive_reward = 10
         self._crewmate_capture_reward = 10
+        self._num_crewmate_dead = 0
+        self._num_tasks_finished = 0
 
         self._base_grid = self.__create_grid()  # with no agents
         self._full_obs = self.__create_grid()
@@ -80,15 +87,32 @@ class AmongUs(gym.Env):
 
         # agent pos (2), prey (25), step (1)
         mask_size = np.prod(self._agent_view_mask)
-        self._obs_high = np.array([1., 1.] + [1.] * mask_size + [1.0])
+        # self._obs_high = np.array([1., 1.] + [1.] * mask_size + [1.0])
+        # self._obs_low = np.array([0., 0.] + [0.] * mask_size + [0.0])
+        self._obs_high = np.array([1., 1.] + [2.] * mask_size + [1.0])
         self._obs_low = np.array([0., 0.] + [0.] * mask_size + [0.0])
+
+        self._imp_obs_high = np.array([1., 1.] + [3.] * mask_size + [1.0])
+        self._imp_obs_low = np.array([0., 0.] + [0.] * mask_size + [0.0])
+        
         if self.full_observable:
             self._obs_high = np.tile(self._obs_high, self.n_agents)
             self._obs_low = np.tile(self._obs_low, self.n_agents)
-        self.observation_space = MultiAgentObservationSpace([spaces.Box(self._obs_low, self._obs_high) for _ in range(self.n_agents)])
+
+        # obs_space_list = [spaces.Box(self._obs_low, self._obs_high) for _ in range(self.n_agents)]
+        obs_space_list = []
+        for i in range(self.n_imposter):
+            obs_space_list.append(spaces.Box(self._imp_obs_low, self._imp_obs_high))
+        for i in range(self.n_imposter, self.n_agents):
+            obs_space_list.append(spaces.Box(self._obs_low, self._obs_high))
+        self.observation_space = MultiAgentObservationSpace(obs_space_list)
 
         self._total_episode_reward = None
         self.seed()
+
+        # project params
+        self.one_time_kill_reward = True
+        self.one_time_task_reward = True
 
     def get_action_meanings(self, agent_i=None):
         if agent_i is not None:
@@ -104,6 +128,29 @@ class AmongUs(gym.Env):
         self._base_img = draw_grid(self._grid_shape[0], self._grid_shape[1], cell_size=CELL_SIZE, fill='white')
 
     def __create_grid(self):
+        grid = [
+            [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+            [1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+            [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0],
+            [0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0],
+            [1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1],
+            [1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1],
+            [1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+            [1, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0],
+            [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+        ]
+
         _grid = [[PRE_IDS['empty'] for _ in range(self._grid_shape[1])] for row in range(self._grid_shape[0])]
         return _grid
 
@@ -130,6 +177,7 @@ class AmongUs(gym.Env):
         self.__draw_base_img()
 
     def get_agent_obs(self):
+        # print("Entering get_agent_obs")
         _obs = []
         for agent_i in range(self.n_agents):
             pos = self.agent_pos[agent_i]
@@ -137,22 +185,31 @@ class AmongUs(gym.Env):
 
             # check if prey is in the view area
             _prey_pos = np.zeros(self._agent_view_mask)  # prey location in neighbour
+            # print("prey_pos", _prey_pos)
             for row in range(max(0, pos[0] - 2), min(pos[0] + 2 + 1, self._grid_shape[0])):
                 for col in range(max(0, pos[1] - 2), min(pos[1] + 2 + 1, self._grid_shape[1])):
-                    if agent_i < self.n_imposter:
-                        if PRE_IDS['crewmate'] in self._full_obs[row][col]:
-                            _prey_pos[row - (pos[0] - 2), col - (pos[1] - 2)] = 1  # get relative position for the prey loc.
-                    else:
-                        if PRE_IDS['prey'] in self._full_obs[row][col]:
-                            _prey_pos[row - (pos[0] - 2), col - (pos[1] - 2)] = 1  # get relative position for the prey loc.
+                    if PRE_IDS['prey'] in self._full_obs[row][col]:
+                        _prey_pos[row - (pos[0] - 2), col - (pos[1] - 2)] = 1  # get relative position for the prey loc.
+                    if PRE_IDS['crewmate'] in self._full_obs[row][col]:
+                        _prey_pos[row - (pos[0] - 2), col - (pos[1] - 2)] = 2  # get relative position for the crewmate loc.
+                    if PRE_IDS['imposter'] in self._full_obs[row][col]:
+                        if agent_i < self.n_imposter:
+                            _prey_pos[row - (pos[0] - 2), col - (pos[1] - 2)] = 3  # get relative position for the imposter loc.
+                        else:
+                            _prey_pos[row - (pos[0] - 2), col - (pos[1] - 2)] = 2  # get relative position for the imposter loc, masked as crewmate
 
+
+            # print("prey_pos after", _prey_pos)
             _agent_i_obs += _prey_pos.flatten().tolist()  # adding prey pos in observable area
             _agent_i_obs += [self._step_count / self._max_steps]  # adding time
             _obs.append(_agent_i_obs)
+            # print("agent_i_obs", _agent_i_obs)
 
         if self.full_observable:
             _obs = np.array(_obs).flatten().tolist()
             _obs = [_obs for _ in range(self.n_agents)]
+        # print("obs", _obs)
+        # print("Exiting get_agent_obs")
         return _obs
 
     def reset(self):
@@ -183,7 +240,7 @@ class AmongUs(gym.Env):
     def __update_agent_pos(self, agent_i, move):
         curr_pos = copy.copy(self.agent_pos[agent_i])
         next_pos = None
-        move = np.random.choice(len(move), p=move)
+        # move = np.random.choice(len(move), p=move)
         if move == 0:  # down
             next_pos = [curr_pos[0] + 1, curr_pos[1]]
         elif move == 1:  # left
@@ -193,6 +250,8 @@ class AmongUs(gym.Env):
         elif move == 3:  # right
             next_pos = [curr_pos[0], curr_pos[1] + 1]
         elif move == 4:  # no-op
+            pass
+        elif move == 5:  # kill
             pass
         else:
             raise Exception('Action Not found!')
@@ -284,6 +343,27 @@ class AmongUs(gym.Env):
             agent_id.append(int(self._full_obs[x][y].split(PRE_IDS['crewmate'])[1]) - 1)
         return _count, agent_id
 
+    def _neighbour_crewmate(self, pos):
+        # check if crewmate is in neighbour
+        _count = 0
+        neighbours_xy = []
+        if self.is_valid([pos[0] + 1, pos[1]]) and PRE_IDS['crewmate'] in self._full_obs[pos[0] + 1][pos[1]]:
+            _count += 1
+            neighbours_xy.append([pos[0] + 1, pos[1]])
+        if self.is_valid([pos[0] - 1, pos[1]]) and PRE_IDS['crewmate'] in self._full_obs[pos[0] - 1][pos[1]]:
+            _count += 1
+            neighbours_xy.append([pos[0] - 1, pos[1]])
+        if self.is_valid([pos[0], pos[1] + 1]) and PRE_IDS['crewmate'] in self._full_obs[pos[0]][pos[1] + 1]:
+            _count += 1
+            neighbours_xy.append([pos[0], pos[1] + 1])
+        if self.is_valid([pos[0], pos[1] - 1]) and PRE_IDS['crewmate'] in self._full_obs[pos[0]][pos[1] - 1]:
+            neighbours_xy.append([pos[0], pos[1] - 1])
+            _count += 1
+
+        agent_id = []
+        for x, y in neighbours_xy:
+            agent_id.append(int(self._full_obs[x][y].split(PRE_IDS['crewmate'])[1]) - 1)
+        return _count, agent_id
 
     def _neighbour_imposter(self, pos):
         # check if imposter is in neighbour
@@ -307,70 +387,92 @@ class AmongUs(gym.Env):
             agent_id.append(int(self._full_obs[x][y].split(PRE_IDS['imposter'])[1]) - 1)
         return _count, agent_id
 
+    def get_moves(self, agents_action):
+        moves = []
+        for agent_i, action_probs in enumerate(agents_action):
+            move = np.random.choice(len(action_probs), p=action_probs)
+            moves.append(move)
+        return moves
+
+    def process_imposter_kills(self, agents_action, rewards):
+        for agent_i, action in enumerate(agents_action):
+            if agent_i < self.n_imposter and action == 5: # imposter kill action
+                if not self._agent_dones[agent_i] and self._agent_alive[agent_i]:
+                    crewmate_neighbour_count, n_i = self._neighbour_crewmate(self.agent_pos[agent_i])
+                    if crewmate_neighbour_count >= 1:
+                        crewmate_to_kill = n_i[0] # picking first crewmate in neighbors to kill
+                        if self._agent_alive[crewmate_to_kill]: # Not sure if this check is necessary
+                            self._agent_alive[crewmate_to_kill] = False
+                            self._agent_dones[crewmate_to_kill] = True
+
+                            self._num_crewmate_dead += 1
+                            # remove killed crewmate from grid
+                            self.__remove_crewmate_pos(crewmate_to_kill)
+
+                            if self.one_time_kill_reward: # kill rewards only added for this kill
+                                for imposter_i in range(self.n_imposter):
+                                    rewards[imposter_i] += self._crewmate_capture_reward
+        
+        if not self.one_time_kill_reward:
+            if self._num_crewmate_dead > 0:
+                for imposter_i in range(self.n_imposter):
+                    rewards[imposter_i] += self._crewmate_capture_reward * self._num_crewmate_dead
+    
+    def process_crewmate_tasks(self, rewards):
+        for prey_i in range(self.n_preys):
+            if self._prey_alive[prey_i]:
+                predator_neighbour_count, n_i = self._neighbour_crewmate(self.prey_pos[prey_i])
+
+                if predator_neighbour_count >= 1:
+                    # _reward = self._penalty if predator_neighbour_count == 1 else self._prey_capture_reward
+                    # self._prey_alive[prey_i] = (predator_neighbour_count == 1)
+
+                    self._prey_alive[prey_i] = False
+                    self._num_tasks_finished += 1
+
+                    if self.one_time_task_reward:
+                        for agent_i in range(self.n_imposter, self.n_agents):
+                            rewards[agent_i] += self._prey_capture_reward
+
+                    # remove killed prey from grid
+                    self.__remove_prey_pos(prey_i)
+        
+        if not self.one_time_task_reward:
+            if self._num_tasks_finished > 0:
+                for agent_i in range(self.n_imposter, self.n_agents):
+                    rewards[agent_i] += self._prey_capture_reward * self._num_tasks_finished
+
+
     def step(self, agents_action):
         self._step_count += 1
         rewards = [self._step_cost for _ in range(self.n_agents)]
 
-        for agent_i, action in enumerate(agents_action):
+        moves = self.get_moves(agents_action)
+        # What's the confusion?
+        # What if agents attack each other at the same time? Should both of them be effected?
+        # Ans: I guess, yes
+        # What if other agent moves before the attack is performed in the same time-step.
+        # Ans: May be, I can process all the attack actions before move directions to ensure attacks have their effect.
+
+        # process imposter kill action:
+        self.process_imposter_kills(moves, rewards)
+
+        # process moves
+        for agent_i, action in enumerate(moves):
             if not (self._agent_dones[agent_i]):
                 self.__update_agent_pos(agent_i, action)
             # reward staying alive (currently for both imposters and crewmates)
             if self._agent_alive[agent_i]:
                 rewards[agent_i] += self._alive_reward
 
-        # update living status of crewmates
-        for agent_i in range(self.n_agents):
-            if not agent_i < self.n_imposter:
-                if self._agent_alive[agent_i]:
-                    imposter_neighbour_count, n_i = self._neighbour_imposter(self.agent_pos[agent_i])
-
-                    if imposter_neighbour_count >= 1:
-                        _reward = self._crewmate_capture_reward
-                        self._agent_alive[agent_i] = False
-                        self._agent_dones[agent_i] = True
-
-                        for imposter_i in range(self.n_imposter):
-                            rewards[imposter_i] += _reward
-
-                        # remove killed crewmate from grid
-                        self.__remove_crewmate_pos(agent_i)
-
-
-        for prey_i in range(self.n_preys):
-            if self._prey_alive[prey_i]:
-                predator_neighbour_count, n_i = self._neighbour_agents(self.prey_pos[prey_i])
-
-                if predator_neighbour_count >= 1:
-                    # _reward = self._penalty if predator_neighbour_count == 1 else self._prey_capture_reward
-                    # self._prey_alive[prey_i] = (predator_neighbour_count == 1)
-
-                    _reward = self._prey_capture_reward
-                    self._prey_alive[prey_i] = False
-
-                    for agent_i in range(self.n_imposter, self.n_agents):
-                        rewards[agent_i] += _reward
-
-                    # remove killed prey from grid
-                    self.__remove_prey_pos(prey_i)
-
-                # prey_move = None
-                # if self._prey_alive[prey_i]:
-                #     # 5 trails : we sample next move and check if prey (smart) doesn't go in neighbourhood of predator
-                #     for _ in range(5):
-                #         _move = self.np_random.choice(len(self._prey_move_probs), 1, p=self._prey_move_probs)[0]
-                #         if self._neighbour_agents(self.__next_pos(self.prey_pos[prey_i], _move))[0] == 0:
-                #             prey_move = _move
-                #             break
-                #     prey_move = 4 if prey_move is None else prey_move  # default is no-op(4)
-
-                # self.__update_prey_pos(prey_i, prey_move)
-
+        # process crewmate task completion
+        self.process_crewmate_tasks(rewards)
 
         if (self._step_count >= self._max_steps):
             for i in range(self.n_agents):
                 self._agent_dones[i] = True
 
-        # All landmarks finished
+        # All tasks finished
         if (True not in self._prey_alive):
             for i in range(self.n_agents):
                 self._agent_dones[i] = True
@@ -383,7 +485,34 @@ class AmongUs(gym.Env):
         for i in range(self.n_agents):
             self._total_episode_reward[i] += rewards[i]
 
-        return self.get_agent_obs(), rewards, self._agent_dones, {'prey_alive': self._prey_alive}
+        return self.get_agent_obs(), rewards, self._agent_dones, {'prey_alive': self._prey_alive, 'moves': moves, 'moves_obs': self.get_move_obs(moves)}
+
+    def get_move_obs(self, moves):
+        total_obs = []
+        for agent_i in range(self.n_imposter, self.n_agents): # all crewmates
+            obs_i = []
+            for agent_j in range(self.n_agents): # everyone else
+                if agent_i != agent_j:
+                    if self.is_visible(agent_i, agent_j):
+                        obs_i.append(moves[agent_j])
+                    else:
+                        obs_i.append(-1)
+            total_obs.append(obs_i)
+        return total_obs
+    '''    
+    num_crewmates * (num_total - 1)
+        [
+            agent 2: [agent1ac, agent3 ac, agent4ac, agent5ac]
+            agent 3: [agent1ac, agent2 ac, agent4ac, agent5ac]
+            agent 4: [agent1ac, agent2 ac, agent3ac, agent5ac]
+        ]
+    '''
+    
+    def is_visible(self, agent_i, agent_j):
+        source_pos = self.agent_pos[agent_i]
+        target_pos = self.agent_pos[agent_j]
+        return (source_pos[0] - 2) <= target_pos[0] <= (source_pos[0] + 2) \
+               and (source_pos[1] - 2) <= target_pos[1] <= (source_pos[1] + 2)                
 
     def __get_neighbour_coordinates(self, pos):
         neighbours = []
@@ -405,7 +534,7 @@ class AmongUs(gym.Env):
             fill_cell(img, self.agent_pos[agent_i], cell_size=CELL_SIZE, fill=AGENT_NEIGHBORHOOD_COLOR, margin=0.1)
 
         for agent_i in range(self.n_agents):
-            if self.agent_alive[agent_i]:
+            if self._agent_alive[agent_i]:
                 if agent_i < self.n_imposter:
                     draw_circle(img, self.agent_pos[agent_i], cell_size=CELL_SIZE, fill=IMPOSTER_COLOR)
                 else:
@@ -456,6 +585,7 @@ ACTION_MEANING = {
     2: "UP",
     3: "RIGHT",
     4: "NOOP",
+    5: "KILL",
 }
 
 PRE_IDS = {

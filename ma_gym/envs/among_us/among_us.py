@@ -42,46 +42,45 @@ class AmongUs(gym.Env):
     """
     metadata = {'render.modes': ['human', 'rgb_array']}
 
-    def __init__(self, grid_shape=(5, 5), n_agents=2, n_preys=1, prey_move_probs=(0.175, 0.175, 0.175, 0.175, 0.3),
+    def __init__(self, grid_shape=(5, 5), n_agents=2, n_preys=1,
                  full_observable=False, penalty=-0.5, step_cost=-0.01, prey_capture_reward=5, max_steps=100, n_imposter = 1):
-        self._grid_shape = grid_shape
-        self.n_agents = n_agents
-        
-        self.n_imposter = n_imposter
-        self.n_crew = n_agents - n_imposter
-
-        self.n_preys = n_preys
-        self._max_steps = max_steps
-        self._step_count = None
-        self._penalty = penalty
-        self._step_cost = step_cost
-        self._prey_capture_reward = prey_capture_reward
-        self._agent_view_mask = (5, 5)
-
-        self.action_space = MultiAgentActionSpace([spaces.Discrete(6) for _ in range(self.n_agents)])
-        
-        self.agent_pos = {_: None for _ in range(self.n_agents)}
-        self.prey_pos = {_: None for _ in range(self.n_preys)}
-
-        self.imposter_pos = {_: None for _ in range(self.n_imposter)}
-        self.crew_pos = {_: None for _ in range(self.n_crew)}
-
-
-        self._prey_alive = None
-        self._agent_alive = None
+        # project params
+        self.one_time_kill_reward = True
+        self.one_time_task_reward = True
+        self.enable_kill_cooldown = True
+        self.kill_cooldown = 20
 
         self._alive_reward = 10
         self._crewmate_capture_reward = 10
         self._num_crewmate_dead = 0
         self._num_tasks_finished = 0
 
+        self._grid_shape = grid_shape
+        self.n_agents = n_agents
+        
+        self.n_imposter = n_imposter
+        self.n_crew = n_agents - n_imposter
+        self.n_preys = n_preys
+        
+        self._max_steps = max_steps
+        self._step_count = None
+        self._penalty = penalty
+        self._step_cost = step_cost
+        self._prey_capture_reward = prey_capture_reward
+        
+        self._agent_view_mask = (5, 5)
+        self.action_space = MultiAgentActionSpace([spaces.Discrete(6) for _ in range(self.n_agents)])
+        
+        self.agent_pos = {_: None for _ in range(self.n_agents)}
+        self.prey_pos = {_: None for _ in range(self.n_preys)}
+
+        self._prey_alive = None
+        self._agent_alive = None
+
         self._base_grid = self.__create_grid()  # with no agents
         self._full_obs = self.__create_grid()
         self._agent_dones = [False for _ in range(self.n_agents)]
-
-        self._crew_dones = [False for _ in range(self.n_crew)]
         
-        self._prey_move_probs = prey_move_probs
         self.viewer = None
         self.full_observable = full_observable
 
@@ -92,8 +91,13 @@ class AmongUs(gym.Env):
         self._obs_high = np.array([1., 1.] + [2.] * mask_size + [1.0])
         self._obs_low = np.array([0., 0.] + [0.] * mask_size + [0.0])
 
-        self._imp_obs_high = np.array([1., 1.] + [3.] * mask_size + [1.0])
-        self._imp_obs_low = np.array([0., 0.] + [0.] * mask_size + [0.0])
+        if self.enable_kill_cooldown:
+            self._imp_obs_high = np.array([1., 1.] + [3.] * mask_size + [1.0] + [self.kill_cooldown])
+            self._imp_obs_low = np.array([0., 0.] + [0.] * mask_size + [0.0] + [0.0])
+            self._imp_cooldowns = np.array([self.kill_cooldown] * self.n_imposter)
+        else:
+            self._imp_obs_high = np.array([1., 1.] + [3.] * mask_size + [1.0])
+            self._imp_obs_low = np.array([0., 0.] + [0.] * mask_size + [0.0])
         
         if self.full_observable:
             self._obs_high = np.tile(self._obs_high, self.n_agents)
@@ -110,9 +114,7 @@ class AmongUs(gym.Env):
         self._total_episode_reward = None
         self.seed()
 
-        # project params
-        self.one_time_kill_reward = True
-        self.one_time_task_reward = True
+
 
     def get_action_meanings(self, agent_i=None):
         if agent_i is not None:
@@ -186,22 +188,31 @@ class AmongUs(gym.Env):
             # check if prey is in the view area
             _prey_pos = np.zeros(self._agent_view_mask)  # prey location in neighbour
             # print("prey_pos", _prey_pos)
-            for row in range(max(0, pos[0] - 2), min(pos[0] + 2 + 1, self._grid_shape[0])):
-                for col in range(max(0, pos[1] - 2), min(pos[1] + 2 + 1, self._grid_shape[1])):
+            row_offset = (int) (self._agent_view_mask[0] // 2)
+            col_offset = (int) (self._agent_view_mask[1] // 2)
+            for row in range(max(0, pos[0] - row_offset), min(pos[0] + row_offset + 1, self._grid_shape[0])):
+                for col in range(max(0, pos[1] - col_offset), min(pos[1] + col_offset + 1, self._grid_shape[1])):
                     if PRE_IDS['prey'] in self._full_obs[row][col]:
-                        _prey_pos[row - (pos[0] - 2), col - (pos[1] - 2)] = 1  # get relative position for the prey loc.
+                        _prey_pos[row - (pos[0] - row_offset), col - (pos[1] - col_offset)] = 1  # get relative position for the prey loc.
                     if PRE_IDS['crewmate'] in self._full_obs[row][col]:
-                        _prey_pos[row - (pos[0] - 2), col - (pos[1] - 2)] = 2  # get relative position for the crewmate loc.
+                        _prey_pos[row - (pos[0] - row_offset), col - (pos[1] - col_offset)] = 2  # get relative position for the crewmate loc.
                     if PRE_IDS['imposter'] in self._full_obs[row][col]:
                         if agent_i < self.n_imposter:
-                            _prey_pos[row - (pos[0] - 2), col - (pos[1] - 2)] = 3  # get relative position for the imposter loc.
+                            _prey_pos[row - (pos[0] - row_offset), col - (pos[1] - col_offset)] = 3  # get relative position for the imposter loc.
                         else:
-                            _prey_pos[row - (pos[0] - 2), col - (pos[1] - 2)] = 2  # get relative position for the imposter loc, masked as crewmate
+                            _prey_pos[row - (pos[0] - row_offset), col - (pos[1] - col_offset)] = 2  # get relative position for the imposter loc, masked as crewmate
+
 
 
             # print("prey_pos after", _prey_pos)
             _agent_i_obs += _prey_pos.flatten().tolist()  # adding prey pos in observable area
             _agent_i_obs += [self._step_count / self._max_steps]  # adding time
+
+            # add cooldown observations if enabled
+            if self.enable_kill_cooldown and agent_i < self.n_imposter:
+                _agent_i_obs.append(self._imp_cooldowns[agent_i])
+            
+            
             _obs.append(_agent_i_obs)
             # print("agent_i_obs", _agent_i_obs)
 
@@ -216,8 +227,6 @@ class AmongUs(gym.Env):
         self._total_episode_reward = [0 for _ in range(self.n_agents)]
         self.agent_pos = {}
         self.prey_pos = {}
-        self.imposter_pos = {}
-        self.crew_pos = {}
 
         self.__init_full_obs()
         self._step_count = 0
@@ -402,6 +411,13 @@ class AmongUs(gym.Env):
                     if crewmate_neighbour_count >= 1:
                         crewmate_to_kill = n_i[0] # picking first crewmate in neighbors to kill
                         if self._agent_alive[crewmate_to_kill]: # Not sure if this check is necessary
+                            
+                            if self.enable_kill_cooldown: # if cooldowns enabled, only process kill if cooldown is done
+                                if self._imp_cooldowns[agent_i] > 0:
+                                    continue
+                                else:
+                                    self._imp_cooldowns[agent_i] = self.kill_cooldown
+                            
                             self._agent_alive[crewmate_to_kill] = False
                             self._agent_dones[crewmate_to_kill] = True
 
@@ -442,6 +458,9 @@ class AmongUs(gym.Env):
                 for agent_i in range(self.n_imposter, self.n_agents):
                     rewards[agent_i] += self._prey_capture_reward * self._num_tasks_finished
 
+    def process_kill_cooldown(self):
+        for agent_i in range(self.n_imposter):
+            self._imp_cooldowns[agent_i] = max(0, self._imp_cooldowns[agent_i] - 1)
 
     def step(self, agents_action):
         self._step_count += 1
@@ -456,6 +475,10 @@ class AmongUs(gym.Env):
 
         # process imposter kill action:
         self.process_imposter_kills(moves, rewards)
+
+        # process kill cooldowns if enabled
+        if self.enable_kill_cooldown:
+            self.process_kill_cooldown()
 
         # process moves
         for agent_i, action in enumerate(moves):

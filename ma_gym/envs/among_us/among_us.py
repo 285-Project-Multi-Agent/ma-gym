@@ -55,7 +55,9 @@ class AmongUs(gym.Env):
         self._num_crewmate_dead = 0
         self._num_tasks_finished = 0
 
+        self.scenario = 1
         self._grid_shape = grid_shape
+
         self.n_agents = n_agents
         
         self.n_imposter = n_imposter
@@ -88,15 +90,15 @@ class AmongUs(gym.Env):
         mask_size = np.prod(self._agent_view_mask)
         # self._obs_high = np.array([1., 1.] + [1.] * mask_size + [1.0])
         # self._obs_low = np.array([0., 0.] + [0.] * mask_size + [0.0])
-        self._obs_high = np.array([1., 1.] + [2.] * mask_size + [1.0])
+        self._obs_high = np.array([1., 1.] + [3.] * mask_size + [1.0])
         self._obs_low = np.array([0., 0.] + [0.] * mask_size + [0.0])
 
         if self.enable_kill_cooldown:
-            self._imp_obs_high = np.array([1., 1.] + [3.] * mask_size + [1.0] + [self.kill_cooldown])
+            self._imp_obs_high = np.array([1., 1.] + [4.] * mask_size + [1.0] + [self.kill_cooldown])
             self._imp_obs_low = np.array([0., 0.] + [0.] * mask_size + [0.0] + [0.0])
             self._imp_cooldowns = np.array([self.kill_cooldown] * self.n_imposter)
         else:
-            self._imp_obs_high = np.array([1., 1.] + [3.] * mask_size + [1.0])
+            self._imp_obs_high = np.array([1., 1.] + [4.] * mask_size + [1.0])
             self._imp_obs_low = np.array([0., 0.] + [0.] * mask_size + [0.0])
         
         if self.full_observable:
@@ -128,37 +130,23 @@ class AmongUs(gym.Env):
 
     def __draw_base_img(self):
         self._base_img = draw_grid(self._grid_shape[0], self._grid_shape[1], cell_size=CELL_SIZE, fill='white')
+        
+        for row in range(self._grid_shape[0]):
+            for col in range(self._grid_shape[1]):
+                if self.__wall_exists((row, col)):
+                    fill_cell(self._base_img, (row, col), cell_size=CELL_SIZE, fill=WALL_COLOR)
+
 
     def __create_grid(self):
-        grid = [
-            [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
-            [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-            [1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-            [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0],
-            [0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0],
-            [0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
-            [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0],
-            [0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0],
-            [1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1],
-            [1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1],
-            [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1],
-            [1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
-            [1, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0],
-            [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0]
-        ]
-
         _grid = [[PRE_IDS['empty'] for _ in range(self._grid_shape[1])] for row in range(self._grid_shape[0])]
         return _grid
+    
+    def __create_medium_grid(self):
+        _grid = [[PRE_IDS['wall']  if cell==1 else PRE_IDS['empty'] for cell in row] for row in MEDIUM_GRID]
+        self._grid_shape = (len(_grid), len(_grid[1]))
+        return _grid
 
-    def __init_full_obs(self):
-        self._full_obs = self.__create_grid()
-
+    def __init_rnd_starting(self):
         for agent_i in range(self.n_agents):
             while True:
                 pos = [self.np_random.randint(0, self._grid_shape[0] - 1), self.np_random.randint(0, self._grid_shape[1] - 1)]
@@ -176,6 +164,16 @@ class AmongUs(gym.Env):
                     break
             self.__update_prey_view(prey_i)
 
+    def __init_full_obs(self):
+        if self.scenario == 0:
+            self._full_obs = self.__create_grid()
+            self.__init_rnd_starting()
+        elif self.scenario == 1:
+            _grid = self.__create_medium_grid()
+            self._full_obs = _grid
+            self._base_grid = _grid
+            self.__init_rnd_starting()
+
         self.__draw_base_img()
 
     def get_agent_obs(self):
@@ -192,15 +190,17 @@ class AmongUs(gym.Env):
             col_offset = (int) (self._agent_view_mask[1] // 2)
             for row in range(max(0, pos[0] - row_offset), min(pos[0] + row_offset + 1, self._grid_shape[0])):
                 for col in range(max(0, pos[1] - col_offset), min(pos[1] + col_offset + 1, self._grid_shape[1])):
-                    if PRE_IDS['prey'] in self._full_obs[row][col]:
+                    if PRE_IDS['wall'] in self._full_obs[row][col]:
                         _prey_pos[row - (pos[0] - row_offset), col - (pos[1] - col_offset)] = 1  # get relative position for the prey loc.
+                    if PRE_IDS['prey'] in self._full_obs[row][col]:
+                        _prey_pos[row - (pos[0] - row_offset), col - (pos[1] - col_offset)] = 2  # get relative position for the prey loc.
                     if PRE_IDS['crewmate'] in self._full_obs[row][col]:
-                        _prey_pos[row - (pos[0] - row_offset), col - (pos[1] - col_offset)] = 2  # get relative position for the crewmate loc.
+                        _prey_pos[row - (pos[0] - row_offset), col - (pos[1] - col_offset)] = 3  # get relative position for the crewmate loc.
                     if PRE_IDS['imposter'] in self._full_obs[row][col]:
                         if agent_i < self.n_imposter:
-                            _prey_pos[row - (pos[0] - row_offset), col - (pos[1] - col_offset)] = 3  # get relative position for the imposter loc.
+                            _prey_pos[row - (pos[0] - row_offset), col - (pos[1] - col_offset)] = 4  # get relative position for the imposter loc.
                         else:
-                            _prey_pos[row - (pos[0] - row_offset), col - (pos[1] - col_offset)] = 2  # get relative position for the imposter loc, masked as crewmate
+                            _prey_pos[row - (pos[0] - row_offset), col - (pos[1] - col_offset)] = 3  # get relative position for the imposter loc, masked as crewmate
 
 
 
@@ -238,7 +238,7 @@ class AmongUs(gym.Env):
 
     def __wall_exists(self, pos):
         row, col = pos
-        return PRE_IDS['wall'] in self._base_grid[row, col]
+        return PRE_IDS['wall'] in self._base_grid[row][col]
 
     def is_valid(self, pos):
         return (0 <= pos[0] < self._grid_shape[0]) and (0 <= pos[1] < self._grid_shape[1])
@@ -619,3 +619,41 @@ PRE_IDS = {
     'imposter': 'I',
     'crewmate': 'C',
 }
+
+
+MEDIUM_GRID = [
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 1, 1, 1, 1, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 1, 0, 0, 1, 1, 1, 0, 0],
+    [0, 0, 1, 0, 0, 0, 0, 1, 0, 0],
+    [0, 0, 1, 0, 0, 0, 0, 1, 0, 0]
+]
+
+
+REAL_GRID = [
+    [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+    [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    [1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0],
+    [0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0],
+    [1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1],
+    [1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1],
+    [1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+    [1, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+]

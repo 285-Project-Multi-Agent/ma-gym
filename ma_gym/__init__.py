@@ -118,3 +118,9 @@ register(
     entry_point='ma_gym.envs.among_us:AmongUs',
     kwargs={'scenario': 2} 
 )
+
+register(
+    id='AmongUs-v3',
+    entry_point='ma_gym.envs.among_us:AmongUs',
+    kwargs={'scenario': 3} 
+)

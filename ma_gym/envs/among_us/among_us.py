@@ -43,9 +43,9 @@ class AmongUs(gym.Env):
     metadata = {'render.modes': ['human', 'rgb_array']}
 
     def __init__(self, grid_shape=(10, 10), n_agents=4, n_preys=3, n_imposter=1,
-                 full_observable=False, penalty=-0.5, step_cost=-0.01, prey_capture_reward=5, max_steps=100,
-                 crewmate_capture_reward=10, persistent_rewards=False, alive_reward=10, 
-                 enable_kill_cooldown=True, kill_cooldown=10, scenario=0
+                 full_observable=False, step_cost=-0.01, prey_capture_reward=500, max_steps=200,
+                 crewmate_capture_reward=500, persistent_rewards=False, alive_reward=.5, 
+                 enable_kill_cooldown=True, kill_cooldown=5, scenario=0, monte_carlo=False
                  ):
         # project params
         self.persistent_kill_reward = persistent_rewards
@@ -60,6 +60,8 @@ class AmongUs(gym.Env):
         self.scenario = scenario
         if self.scenario == 2:
             n_agents, n_preys, n_imposter = 4, 3, 1
+        elif self.scenario == 3:
+            n_agents, n_preys, n_imposter = 10, 14, 2
             
         self._grid_shape = grid_shape
 
@@ -73,11 +75,17 @@ class AmongUs(gym.Env):
         
         self._max_steps = max_steps
         self._step_count = None
-        self._penalty = penalty
         self._step_cost = step_cost
         
         self._agent_view_mask = (5, 5)
-        self.action_space = MultiAgentActionSpace([spaces.Discrete(6) for _ in range(self.n_agents)])
+        self.monte_carlo = monte_carlo
+        if self.monte_carlo:
+            # self.action_space = MultiAgentActionSpace([spaces.Discrete(6) for _ in range(self.n_agents)])
+            self.action_space = MultiAgentActionSpace([spaces.Discrete(6) if agent_i < self.n_imposter else spaces.Discrete(5) for agent_i in range(self.n_agents)])
+            # self.agent_votes = [0 for _ in range(self.n_agents)]
+            self.correct_vote = 0
+        else:
+            self.action_space = MultiAgentActionSpace([spaces.Discrete(6) if agent_i < self.n_imposter else spaces.Discrete(5) for agent_i in range(self.n_agents)])
         
         self.agent_pos = {_: None for _ in range(self.n_agents)}
         self.prey_pos = {_: None for _ in range(self.n_preys)}
@@ -148,7 +156,12 @@ class AmongUs(gym.Env):
         return _grid
     
     def __create_medium_grid(self):
-        _grid = [[PRE_IDS['wall']  if cell==1 else PRE_IDS['empty'] for cell in row] for row in MEDIUM_GRID]
+        _grid = [[PRE_IDS['wall']  if cell==1 else PRE_IDS['empty'] for cell in row] for row in MEDIUM_GRID_2]
+        self._grid_shape = (len(_grid), len(_grid[1]))
+        return _grid
+    
+    def __create_real_grid(self):
+        _grid = [[PRE_IDS['wall']  if cell==1 else PRE_IDS['empty'] for cell in row] for row in REAL_GRID]
         self._grid_shape = (len(_grid), len(_grid[1]))
         return _grid
 
@@ -173,24 +186,40 @@ class AmongUs(gym.Env):
     def __init_fixed_medium(self):
         # 3 tasks, 3 crewmates, 1 imposter
         # imposter
-        self.agent_pos[0] = [0, 3]
+        self.agent_pos[0] = [8, 8]
         
         # crewmates
-        self.agent_pos[1] = [1, 5]
-        self.agent_pos[2] = [8, 5]
-        self.agent_pos[3] = [4, 1]
+        self.agent_pos[1] = [1, 8]
+        self.agent_pos[2] = [8, 4]
+        self.agent_pos[3] = [1, 1]
 
         for agent_i in range(self.n_agents):
             self.__update_agent_view(agent_i)
         
         # tasks
-        self.prey_pos[0] = [0, 9]
-        self.prey_pos[1] = [9, 9]
-        self.prey_pos[2] = [3, 4]
+        self.prey_pos[0] = [5, 4]
+        self.prey_pos[1] = [6, 1]
+        self.prey_pos[2] = [4, 1]
 
         for prey_i in range(self.n_preys):
             self.__update_prey_view(prey_i)
 
+    def __init_fixed_real(self):
+        i_pos = [[2, 18], [16, 16]]
+        for agent_i in range(self.n_imposter):
+            self.agent_pos[agent_i] = i_pos[agent_i]
+            self.__update_agent_view(agent_i)
+
+        c_pos = [[3, 14], [5, 18], [3, 23], [8, 20], [18, 14], [18, 19], [10, 35], [10, 4]]
+
+        for agent_i in range(self.n_imposter, self.n_agents):
+            self.agent_pos[agent_i] = c_pos[agent_i - self.n_imposter]
+            self.__update_agent_view(agent_i)
+        
+        p_pos = [[1, 18], [3, 35], [6, 28], [9, 38], [18, 32], [17, 25], [17, 17], [7, 23], [15, 11], [12, 11], [9, 12], [7, 8], [12, 1], [5, 1]]          
+        for prey_i in range(self.n_preys):
+            self.prey_pos[prey_i] = p_pos[prey_i]
+            self.__update_prey_view(prey_i)
 
     def __init_full_obs(self):
         if self.scenario == 0:
@@ -206,7 +235,11 @@ class AmongUs(gym.Env):
             self._full_obs = _grid
             self._base_grid = _grid
             self.__init_fixed_medium()
-
+        elif self.scenario == 3:
+            _grid = self.__create_real_grid()
+            self._full_obs = _grid
+            self._base_grid = _grid
+            self.__init_fixed_real()
         self.__draw_base_img()
 
     def get_agent_obs(self):
@@ -478,8 +511,6 @@ class AmongUs(gym.Env):
                 predator_neighbour_count, n_i = self._neighbour_crewmate(self.prey_pos[prey_i])
 
                 if predator_neighbour_count >= 1:
-                    # _reward = self._penalty if predator_neighbour_count == 1 else self._prey_capture_reward
-                    # self._prey_alive[prey_i] = (predator_neighbour_count == 1)
 
                     self._prey_alive[prey_i] = False
                     self._num_tasks_finished += 1
@@ -500,6 +531,40 @@ class AmongUs(gym.Env):
         for agent_i in range(self.n_imposter):
             self._imp_cooldowns[agent_i] = max(0, self._imp_cooldowns[agent_i] - 1)
 
+
+    '''
+    env.set_agent_vote(crew_mate_id, 1)
+    val = 1 if correct vote, -1 if wrong
+    '''
+    def set_agent_vote(self, agent_i, val):
+        if self.monte_carlo:
+            self.agent_votes[agent_i] = val
+    
+    def set_vote_result(self, val):
+        self.correct_vote = val
+
+    def process_votes(self, rewards):
+        
+        for agent_i in range(self.n_imposter, self.n_agents):
+            # if self.agent_votes[agent_i] == 1: # got it right
+            if self.correct_vote == 1: # got it right
+                rewards[agent_i] += 4000
+
+            elif self.correct_vote == -1: # got it wrong
+            # elif self.agent_votes[agent_i] == -1: # got it wrong
+                rewards[agent_i] -= 1000
+        
+        for i in range(self.n_agents):
+            self._agent_dones[i] = True
+        for imp_i in range(self.n_imposter):
+            if self.correct_vote == 1:
+                rewards[imp_i] -= 400
+            else:
+                rewards[imp_i] += 100
+        
+        self.correct_vote = 0
+    # [0, 0, 0, 0, 0, 1]
+ 
     def step(self, agents_action):
         self._step_count += 1
         rewards = [self._step_cost for _ in range(self.n_agents)]
@@ -511,6 +576,9 @@ class AmongUs(gym.Env):
         # What if other agent moves before the attack is performed in the same time-step.
         # Ans: May be, I can process all the attack actions before move directions to ensure attacks have their effect.
 
+        if self.monte_carlo and self.correct_vote != 0:
+            self.process_votes(rewards)
+        
         # process imposter kill action:
         self.process_imposter_kills(moves, rewards)
 
@@ -672,26 +740,40 @@ MEDIUM_GRID = [
     [0, 0, 1, 0, 0, 0, 0, 1, 0, 0]
 ]
 
+MEDIUM_GRID_2 = [
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+    [1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+    [1, 1, 1, 1, 0, 0, 1, 0, 0, 1],
+    [1, 0, 0, 1, 1, 1, 1, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+]
+
 
 REAL_GRID = [
-    [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
-    [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+    [1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0],
     [1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0],
     [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0],
-    [0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0],
-    [0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0],
-    [0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0],
-    [1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1],
+    [1, 2, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0],
+    [1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 2, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 0, 0, 2, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 0, 0, 2, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1],
+    [1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 2, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 2, 1],
+    [1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1],
+    [1, 2, 1, 0, 0, 0, 1, 1, 1, 1, 0, 2, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1],
     [1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1],
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1],
-    [1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
-    [1, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0],
-    [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1],
+    [1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 2, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+    [1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0],
+    [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 2, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 2, 0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0] 
+    # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 ]

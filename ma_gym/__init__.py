@@ -100,3 +100,21 @@ for game_info in [[(5, 5), 2, 1], [(7, 7), 4, 2]]:  # [(grid_shape, predator_n, 
             'prey_move_probs': [0, 0, 0, 0, 1]
         }
     )
+
+register(
+    id='AmongUs-v0',
+    entry_point='ma_gym.envs.among_us:AmongUs',
+    kwargs={'scenario': 0} 
+)
+
+register(
+    id='AmongUs-v1',
+    entry_point='ma_gym.envs.among_us:AmongUs',
+    kwargs={'scenario': 1} 
+)
+
+register(
+    id='AmongUs-v2',
+    entry_point='ma_gym.envs.among_us:AmongUs',
+    kwargs={'scenario': 2} 
+)

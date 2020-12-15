@@ -42,33 +42,39 @@ class AmongUs(gym.Env):
     """
     metadata = {'render.modes': ['human', 'rgb_array']}
 
-    def __init__(self, grid_shape=(5, 5), n_agents=2, n_preys=1,
-                 full_observable=False, penalty=-0.5, step_cost=-0.01, prey_capture_reward=5, max_steps=100, n_imposter = 1):
+    def __init__(self, grid_shape=(10, 10), n_agents=4, n_preys=3, n_imposter=1,
+                 full_observable=False, penalty=-0.5, step_cost=-0.01, prey_capture_reward=5, max_steps=100,
+                 crewmate_capture_reward=10, persistent_rewards=False, alive_reward=10, 
+                 enable_kill_cooldown=True, kill_cooldown=10, scenario=0
+                 ):
         # project params
-        self.one_time_kill_reward = True
-        self.one_time_task_reward = True
-        self.enable_kill_cooldown = True
-        self.kill_cooldown = 20
+        self.persistent_kill_reward = persistent_rewards
+        self.persistent_task_reward = persistent_rewards
+        self.enable_kill_cooldown = enable_kill_cooldown
+        self.kill_cooldown = kill_cooldown
 
-        self._alive_reward = 10
-        self._crewmate_capture_reward = 10
-        self._num_crewmate_dead = 0
-        self._num_tasks_finished = 0
+        self._alive_reward = alive_reward
+        self._crewmate_capture_reward = crewmate_capture_reward
+        self._prey_capture_reward = prey_capture_reward
 
-        self.scenario = 1
+        self.scenario = scenario
+        if self.scenario == 2:
+            n_agents, n_preys, n_imposter = 4, 3, 1
+            
         self._grid_shape = grid_shape
 
         self.n_agents = n_agents
-        
         self.n_imposter = n_imposter
         self.n_crew = n_agents - n_imposter
         self.n_preys = n_preys
+
+        self._num_crewmate_dead = 0
+        self._num_tasks_finished = 0
         
         self._max_steps = max_steps
         self._step_count = None
         self._penalty = penalty
         self._step_cost = step_cost
-        self._prey_capture_reward = prey_capture_reward
         
         self._agent_view_mask = (5, 5)
         self.action_space = MultiAgentActionSpace([spaces.Discrete(6) for _ in range(self.n_agents)])
@@ -163,6 +169,28 @@ class AmongUs(gym.Env):
                     self.prey_pos[prey_i] = pos
                     break
             self.__update_prey_view(prey_i)
+    
+    def __init_fixed_medium(self):
+        # 3 tasks, 3 crewmates, 1 imposter
+        # imposter
+        self.agent_pos[0] = [0, 3]
+        
+        # crewmates
+        self.agent_pos[1] = [1, 5]
+        self.agent_pos[2] = [8, 5]
+        self.agent_pos[3] = [4, 1]
+
+        for agent_i in range(self.n_agents):
+            self.__update_agent_view(agent_i)
+        
+        # tasks
+        self.prey_pos[0] = [0, 9]
+        self.prey_pos[1] = [9, 9]
+        self.prey_pos[2] = [3, 4]
+
+        for prey_i in range(self.n_preys):
+            self.__update_prey_view(prey_i)
+
 
     def __init_full_obs(self):
         if self.scenario == 0:
@@ -173,6 +201,11 @@ class AmongUs(gym.Env):
             self._full_obs = _grid
             self._base_grid = _grid
             self.__init_rnd_starting()
+        elif self.scenario == 2:
+            _grid = self.__create_medium_grid()
+            self._full_obs = _grid
+            self._base_grid = _grid
+            self.__init_fixed_medium()
 
         self.__draw_base_img()
 
@@ -233,6 +266,11 @@ class AmongUs(gym.Env):
         self._agent_dones = [False for _ in range(self.n_agents)]
         self._prey_alive = [True for _ in range(self.n_preys)]
         self._agent_alive = [True for _ in range(self.n_agents)]
+
+        self._num_crewmate_dead = 0
+        self._num_tasks_finished = 0
+        if self.enable_kill_cooldown:
+            self._imp_cooldowns = np.array([self.kill_cooldown] * self.n_imposter)
 
         return self.get_agent_obs()
 
@@ -425,11 +463,11 @@ class AmongUs(gym.Env):
                             # remove killed crewmate from grid
                             self.__remove_crewmate_pos(crewmate_to_kill)
 
-                            if self.one_time_kill_reward: # kill rewards only added for this kill
+                            if not self.persistent_kill_reward: # kill rewards only added for this kill
                                 for imposter_i in range(self.n_imposter):
                                     rewards[imposter_i] += self._crewmate_capture_reward
         
-        if not self.one_time_kill_reward:
+        if self.persistent_kill_reward: # kill rewards added for every step
             if self._num_crewmate_dead > 0:
                 for imposter_i in range(self.n_imposter):
                     rewards[imposter_i] += self._crewmate_capture_reward * self._num_crewmate_dead
@@ -446,14 +484,14 @@ class AmongUs(gym.Env):
                     self._prey_alive[prey_i] = False
                     self._num_tasks_finished += 1
 
-                    if self.one_time_task_reward:
+                    if not self.persistent_task_reward: # task rewards only added for this step
                         for agent_i in range(self.n_imposter, self.n_agents):
                             rewards[agent_i] += self._prey_capture_reward
 
                     # remove killed prey from grid
                     self.__remove_prey_pos(prey_i)
         
-        if not self.one_time_task_reward:
+        if self.persistent_task_reward: # task rewards added for every step
             if self._num_tasks_finished > 0:
                 for agent_i in range(self.n_imposter, self.n_agents):
                     rewards[agent_i] += self._prey_capture_reward * self._num_tasks_finished
@@ -551,10 +589,10 @@ class AmongUs(gym.Env):
 
     def render(self, mode='human'):
         img = copy.copy(self._base_img)
-        for agent_i in range(self.n_agents):
-            for neighbour in self.__get_neighbour_coordinates(self.agent_pos[agent_i]):
-                fill_cell(img, neighbour, cell_size=CELL_SIZE, fill=AGENT_NEIGHBORHOOD_COLOR, margin=0.1)
-            fill_cell(img, self.agent_pos[agent_i], cell_size=CELL_SIZE, fill=AGENT_NEIGHBORHOOD_COLOR, margin=0.1)
+        # for agent_i in range(self.n_agents):
+        #     for neighbour in self.__get_neighbour_coordinates(self.agent_pos[agent_i]):
+        #         fill_cell(img, neighbour, cell_size=CELL_SIZE, fill=AGENT_NEIGHBORHOOD_COLOR, margin=0.1)
+        #     fill_cell(img, self.agent_pos[agent_i], cell_size=CELL_SIZE, fill=AGENT_NEIGHBORHOOD_COLOR, margin=0.1)
 
         for agent_i in range(self.n_agents):
             if self._agent_alive[agent_i]:

@@ -44,12 +44,12 @@ class AmongUs(gym.Env):
 
     def __init__(self, grid_shape=(10, 10), n_agents=4, n_preys=3, n_imposter=1,
                  full_observable=False, step_cost=-0.01, prey_capture_reward=500, max_steps=200,
-                 crewmate_capture_reward=500, persistent_rewards=False, alive_reward=.5, 
+                 crewmate_capture_reward=500, persistent_kill=False, persistent_task=False, alive_reward=.5, 
                  enable_kill_cooldown=True, kill_cooldown=5, scenario=0, monte_carlo=False
                  ):
         # project params
-        self.persistent_kill_reward = persistent_rewards
-        self.persistent_task_reward = persistent_rewards
+        self.persistent_kill_reward = persistent_kill
+        self.persistent_task_reward = persistent_task
         self.enable_kill_cooldown = enable_kill_cooldown
         self.kill_cooldown = kill_cooldown
 
@@ -203,6 +203,26 @@ class AmongUs(gym.Env):
 
         for prey_i in range(self.n_preys):
             self.__update_prey_view(prey_i)
+        # self.agent_pos[0] = [4, 5]
+        
+        # # crewmates
+        # # self.agent_pos[1] = [1, 8]
+        # # self.agent_pos[2] = [8, 8]
+        # # self.agent_pos[3] = [5, 8]
+        # self.agent_pos[1] = [1, 4]
+        # self.agent_pos[2] = [8, 4]
+        # self.agent_pos[3] = [7, 7]
+
+        # for agent_i in range(self.n_agents):
+        #     self.__update_agent_view(agent_i)
+        
+        # # tasks
+        # self.prey_pos[0] = [5, 4]
+        # self.prey_pos[1] = [6, 1]
+        # self.prey_pos[2] = [4, 1]
+
+        # for prey_i in range(self.n_preys):
+        #     self.__update_prey_view(prey_i)
 
     def __init_fixed_real(self):
         i_pos = [[2, 18], [16, 16]]
@@ -748,6 +768,19 @@ MEDIUM_GRID_2 = [
     [1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
     [1, 1, 1, 1, 0, 0, 1, 0, 0, 1],
     [1, 0, 0, 1, 1, 1, 1, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+]
+
+MEDIUM_GRID_3 = [
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+    [1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+    [1, 1, 1, 1, 0, 0, 1, 0, 0, 1],
+    [1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
     [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
     [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
     [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
